@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-<title>Creepy Smiley</title>
+<title>Die With A Smile</title>
 <meta name="theme-color" content="#1a1400">
 <style>
   :root { --yellow:#ffd93b; --panel:rgba(14,10,24,0.86); --line:rgba(255,255,255,0.12); }
@@ -97,7 +97,7 @@
     <div id="toast"></div>
     <div id="stageBox"><div id="stageName"></div><div id="barBg"><div id="barFill"></div></div></div>
     <div id="intro">
-      <h1>Creepy Smiley :)</h1>
+      <h1>Die With A Smile :)</h1>
       <p>Click the smiley to get clicks. Spend your clicks on upgrades so you can click even more.</p>
       <p style="opacity:0.7;font-size:14px">The more you click, the more the smiley's mood changes: happy, laughing, silly, surprised, sad... and much, much later it gets spooky! There's a Calm mode (🌙) that turns off flashing and shaking.</p>
       <button id="startBtn">Start</button>
@@ -677,7 +677,7 @@ if (awaySec > 300 && perSecond() > 0) setTimeout(() => unlockAch('back'), 1800);
 lastStage = stageInfo().idx;
 cur = Object.assign({}, STAGES[lastStage].p);
 buildShop(); syncTools(); resize(); updateShop();
-if (S.total > 0) $('intro').querySelector('h1').textContent = 'Welcome back :)';
+if (S.total > 0) { const wb = document.createElement('p'); wb.textContent = 'Welcome back!'; $('intro').querySelector('h1').after(wb); }
 window.addEventListener('beforeunload', saveGame);
 document.addEventListener('visibilitychange', () => { if (document.hidden) saveGame(); });
 requestAnimationFrame(frame);
