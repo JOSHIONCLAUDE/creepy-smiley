@@ -46,6 +46,23 @@
   #intro p { max-width:440px; opacity:0.88; line-height:1.5; margin:6px 0; }
   #startBtn { margin-top:16px; padding:14px 38px; font-size:22px; font-weight:800; background:var(--yellow); color:#221800; border:none; border-radius:14px; cursor:pointer; }
   #toast { position:absolute; left:50%; top:96px; transform:translateX(-50%); background:rgba(0,0,0,0.7); border:1px solid var(--line); padding:8px 16px; border-radius:20px; font-size:14px; opacity:0; transition:opacity 0.4s; pointer-events:none; z-index:4; white-space:nowrap; }
+  #achPanel { position:absolute; inset:0; z-index:9; background:rgba(8,6,16,0.95); display:none; flex-direction:column; }
+  #achPanel.open { display:flex; }
+  #achHead { padding:14px 16px 4px; display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  #achHead h2 { margin:0; font-size:22px; }
+  #achSub { padding:0 16px 8px; font-size:13px; opacity:0.85; }
+  #achBarBg { height:8px; margin:0 16px 8px; background:rgba(255,255,255,0.15); border-radius:5px; overflow:hidden; }
+  #achBarFill { height:100%; width:0; background:linear-gradient(90deg,#ffd93b,#ff8a3d); transition:width .4s; }
+  #achGrid { flex:1; overflow-y:auto; padding:6px 14px 22px; display:grid; grid-template-columns:repeat(auto-fill, minmax(230px, 1fr)); gap:8px; align-content:start; }
+  .ach { display:flex; gap:10px; align-items:center; background:#241d36; border:1px solid var(--line); border-radius:10px; padding:9px 10px; }
+  .ach .ic { font-size:28px; width:38px; text-align:center; flex:none; }
+  .ach .nm { font-weight:700; font-size:14px; }
+  .ach .ds { font-size:12px; opacity:0.8; margin-top:1px; }
+  .ach.locked { opacity:0.5; } .ach.locked .ic { filter:grayscale(1); }
+  .ach.done { border-color:#f1c40f; background:#33291a; }
+  #achToast { position:absolute; left:50%; top:-120px; transform:translateX(-50%); z-index:12; background:linear-gradient(135deg,#3b2a05,#1d1403); border:2px solid #f1c40f; border-radius:14px; padding:10px 18px; text-align:center; box-shadow:0 8px 24px rgba(0,0,0,0.5); transition:top .5s cubic-bezier(.2,1.2,.4,1); pointer-events:none; max-width:92%; }
+  #achToast.show { top:12px; }
+  #achToast span { color:#ffd93b; font-size:12px; margin-left:4px; }
   @media (max-width: 820px) and (orientation: portrait) {
     #app { flex-direction:column; }
     #shop { width:100%; max-width:none; height:44%; border-left:none; border-top:1px solid var(--line); }
@@ -65,11 +82,18 @@
     <canvas id="cv"></canvas>
     <div id="hud"><div id="count">0</div><div id="rates"></div></div>
     <div id="tools">
+      <button class="tool" id="achBtn" title="Achievements">🏆</button>
       <button class="tool" id="muteBtn" title="Sound">🔊</button>
       <button class="tool" id="calmBtn" title="Calm mode (no flashing or shaking)">🌙</button>
       <button class="tool" id="resetBtn" title="Reset game">↺</button>
     </div>
     <div id="whisper"></div>
+    <div id="achToast"></div>
+    <div id="achPanel" role="dialog" aria-label="Achievements">
+      <div id="achHead"><h2>🏆 Achievements</h2><button class="tool" id="achClose" title="Close">✕</button></div>
+      <div id="achSub"></div><div id="achBarBg"><div id="achBarFill"></div></div>
+      <div id="achGrid"></div>
+    </div>
     <div id="toast"></div>
     <div id="stageBox"><div id="stageName"></div><div id="barBg"><div id="barFill"></div></div></div>
     <div id="intro">
@@ -138,12 +162,14 @@ const UPGRADES = [
 ];
 
 // ====================== State ======================
-let S = { clicks: 0, total: 0, owned: {}, muted: false, calm: false, lastSeen: Date.now(), started: false };
+let S = { clicks: 0, total: 0, owned: {}, muted: false, calm: false, lastSeen: Date.now(), started: false, ach: {}, manual: 0, crits: 0, bought: 0 };
 function loadGame() {
   try { const raw = localStorage.getItem(SAVE_KEY); if (raw) { const p = JSON.parse(raw); Object.assign(S, p); } } catch (e) {}
   if (typeof S.clicks !== 'number' || !isFinite(S.clicks)) S.clicks = 0;
   if (typeof S.total !== 'number' || !isFinite(S.total)) S.total = 0;
   if (!S.owned || typeof S.owned !== 'object') S.owned = {};
+  if (!S.ach || typeof S.ach !== 'object') S.ach = {};
+  ['manual', 'crits', 'bought'].forEach(k => { if (typeof S[k] !== 'number' || !isFinite(S[k])) S[k] = 0; });
   UPGRADES.forEach(u => { S.owned[u.id] = Math.max(0, Math.min(u.max || 100000, Math.floor(S.owned[u.id] || 0))); });
 }
 function saveGame() { S.lastSeen = Date.now(); try { localStorage.setItem(SAVE_KEY, JSON.stringify(S)); } catch (e) {} }
@@ -151,9 +177,10 @@ function saveGame() { S.lastSeen = Date.now(); try { localStorage.setItem(SAVE_K
 // ====================== Maths ======================
 const own = id => S.owned[id] || 0;
 function mult(kind) { return UPGRADES.filter(u => u.kind === kind).reduce((m, u) => m * Math.pow(u.amount, own(u.id)), 1); }
-function clickValue() { return (1 + UPGRADES.filter(u => u.kind === 'power').reduce((a, u) => a + u.amount * own(u.id), 0)) * mult('mult') * mult('pact'); }
+const achBonus = () => 1 + 0.02 * Object.keys(S.ach || {}).length;      // every achievement gives +2% to all clicks
+function clickValue() { return (1 + UPGRADES.filter(u => u.kind === 'power').reduce((a, u) => a + u.amount * own(u.id), 0)) * mult('mult') * mult('pact') * achBonus(); }
 function critChance() { return Math.min(0.6, UPGRADES.filter(u => u.kind === 'crit').reduce((a, u) => a + u.amount * own(u.id), 0)); }
-function perSecond() { return UPGRADES.filter(u => u.kind === 'auto').reduce((a, u) => a + u.amount * own(u.id), 0) * mult('pact'); }
+function perSecond() { return UPGRADES.filter(u => u.kind === 'auto').reduce((a, u) => a + u.amount * own(u.id), 0) * mult('pact') * achBonus(); }
 function unitCost(u, n) { return Math.floor(u.base * Math.pow(u.growth, n)); }
 function bulkCost(u, count) { let c = 0; for (let i = 0; i < count; i++) c += unitCost(u, own(u.id) + i); return c; }
 function maxBuy(u) {
@@ -175,6 +202,82 @@ function stageInfo() {
   let frac = 1;
   if (next) { const lo = STAGES[idx].at > 0 ? Math.log10(STAGES[idx].at) : 0, hi = Math.log10(next.at), v = Math.log10(Math.max(1, S.total)); frac = Math.max(0, Math.min(1, (v - lo) / (hi - lo))); }
   return { idx, next, frac };
+}
+
+// ====================== Achievements ======================
+const AUTO_IDS = UPGRADES.filter(u => u.kind === 'auto').map(u => u.id);
+const moodReached = n => stageInfo().idx >= n;
+const ACHS = [
+  // clicking
+  { id: 'c1',   icon: '👆', name: 'First Smile',        desc: 'Click the smiley once',              test: () => S.manual >= 1 },
+  { id: 'c10',  icon: '✋', name: 'Warming Up',         desc: 'Click 10 times',                     test: () => S.manual >= 10 },
+  { id: 'c100', icon: '🙌', name: 'Click Happy',        desc: 'Click 100 times',                    test: () => S.manual >= 100 },
+  { id: 'c1k',  icon: '💪', name: 'Finger Workout',     desc: 'Click 1,000 times',                  test: () => S.manual >= 1000 },
+  { id: 'c10k', icon: '🤖', name: 'Click Machine',      desc: 'Click 10,000 times',                 test: () => S.manual >= 10000 },
+  { id: 'speed', icon: '⚡', name: 'Speedy Fingers',    desc: 'Click 10 times in one second',       secret: true },
+  // collecting
+  { id: 'bank', icon: '🐷', name: 'Piggy Bank',         desc: 'Hold 500 clicks at the same time',   test: () => S.clicks >= 500 },
+  { id: 't1m',  icon: '💰', name: 'Click Millionaire',  desc: 'Earn 1 million clicks in total',     test: () => S.total >= 1e6 },
+  { id: 't1b',  icon: '🏦', name: 'Click Billionaire',  desc: 'Earn 1 billion clicks in total',     test: () => S.total >= 1e9 },
+  { id: 't1t',  icon: '🌟', name: 'Click Trillionaire', desc: 'Earn 1 trillion clicks in total',    test: () => S.total >= 1e12 },
+  // moods
+  { id: 'm1',   icon: '😂', name: 'Ha Ha Ha!',          desc: 'Make the smiley laugh',              test: () => moodReached(1) },
+  { id: 'm2',   icon: '😜', name: 'Silly Billy',        desc: 'Make the smiley silly',              test: () => moodReached(2) },
+  { id: 'm3',   icon: '😮', name: 'Oh My!',             desc: 'Surprise the smiley',                test: () => moodReached(3) },
+  { id: 'm4',   icon: '😢', name: 'Aww...',             desc: 'Make the smiley sad',                test: () => moodReached(4) },
+  { id: 'm5',   icon: '😭', name: 'Boo Hoo',            desc: 'Make the smiley cry',                test: () => moodReached(5) },
+  { id: 'm6',   icon: '😠', name: 'Grumpy Pants',       desc: 'Make the smiley angry',              test: () => moodReached(6) },
+  { id: 'm7',   icon: '😰', name: 'Gulp!',              desc: 'Make the smiley nervous',            test: () => moodReached(7) },
+  { id: 'm8',   icon: '👹', name: "It's Creepy",        desc: 'Reach the Creepy mood',              test: () => moodReached(8) },
+  { id: 'm9',   icon: '💀', name: 'Nightmare Fuel',     desc: 'Reach the Nightmare mood',           test: () => moodReached(9) },
+  { id: 'm10',  icon: '😁', name: 'THE SMILE',          desc: 'Reach the final mood',               test: () => moodReached(10) },
+  // upgrades
+  { id: 'b1',   icon: '🛒', name: 'Shopper',            desc: 'Buy your first upgrade',             test: () => S.bought >= 1 },
+  { id: 'b25',  icon: '🛍️', name: 'Upgrade Fan',        desc: 'Buy 25 upgrades',                    test: () => S.bought >= 25 },
+  { id: 'b100', icon: '💳', name: 'Big Spender',        desc: 'Buy 100 upgrades',                   test: () => S.bought >= 100 },
+  { id: 'b500', icon: '🏪', name: 'Shopping Spree',     desc: 'Buy 500 upgrades',                   test: () => S.bought >= 500 },
+  { id: 'team', icon: '👥', name: 'Full Team',          desc: 'Own at least one of every helper',   test: () => AUTO_IDS.every(id => own(id) > 0) },
+  { id: 'xd',   icon: '✌️', name: 'Double Trouble',     desc: 'Max out Double Tap',                 test: () => own('double') >= 10 },
+  { id: 'xl',   icon: '🌈', name: 'Lucky Charm',        desc: 'Max out Lucky Grin',                 test: () => own('lucky') >= 20 },
+  { id: 'xp',   icon: '😈', name: 'Mood Swing Master',  desc: 'Max out Mood Swing',                 test: () => own('pact') >= 8 },
+  // luck
+  { id: 'k1',   icon: '🍀', name: 'Lucky!',             desc: 'Get your first lucky x5 click',      test: () => S.crits >= 1 },
+  { id: 'k50',  icon: '🎰', name: 'Lucky Streak',       desc: 'Get 50 lucky clicks',                test: () => S.crits >= 50 },
+  // power
+  { id: 's10',  icon: '🙂', name: 'Helpers at Work',    desc: 'Reach 10 clicks per second',         test: () => perSecond() >= 10 },
+  { id: 's1k',  icon: '🏭', name: 'Click Factory',      desc: 'Reach 1,000 clicks per second',      test: () => perSecond() >= 1000 },
+  { id: 's1m',  icon: '🚀', name: 'Unstoppable',        desc: 'Reach 1 million clicks per second',  test: () => perSecond() >= 1e6 },
+  { id: 'p100', icon: '💥', name: 'Power Finger',       desc: 'Make one click worth 100',           test: () => clickValue() >= 100 },
+  { id: 'p10k', icon: '🔨', name: 'Mighty Finger',      desc: 'Make one click worth 10,000',        test: () => clickValue() >= 10000 },
+  // secrets
+  { id: 'chill', icon: '🌙', name: 'Chill Pill',        desc: 'Turn on Calm mode',                  secret: true },
+  { id: 'back',  icon: '👋', name: 'Welcome Back',      desc: 'Come back after being away for 5 minutes', secret: true }
+];
+const achQ = []; let achShowing = false, achSilent = false;
+function achCount() { return Object.keys(S.ach).length; }
+function unlockAch(id) {
+  const a = ACHS.find(x => x.id === id); if (!a || S.ach[id]) return false;
+  S.ach[id] = Date.now();
+  if (!achSilent) { achQ.push(a); pumpAch(); }
+  renderAch(); saveGame(); return true;
+}
+function checkAch() { ACHS.forEach(a => { if (a.test && !S.ach[a.id] && a.test()) unlockAch(a.id); }); }
+function pumpAch() {
+  if (achShowing || !achQ.length) return;
+  achShowing = true;
+  const a = achQ.shift(), el = document.getElementById('achToast');
+  el.innerHTML = '🏆 <b>Achievement unlocked!</b><br>' + a.icon + ' ' + a.name + ' <span>+2% clicks</span>';
+  el.classList.add('show'); sfxAch();
+  setTimeout(() => { el.classList.remove('show'); setTimeout(() => { achShowing = false; pumpAch(); }, 600); }, 2800);
+}
+function renderAch() {
+  const n = achCount();
+  document.getElementById('achSub').textContent = n + ' of ' + ACHS.length + ' unlocked  •  bonus: +' + (n * 2) + '% to all clicks';
+  document.getElementById('achBarFill').style.width = (n / ACHS.length * 100) + '%';
+  document.getElementById('achGrid').innerHTML = ACHS.slice().sort((a, b) => (S.ach[b.id] ? 1 : 0) - (S.ach[a.id] ? 1 : 0) || ACHS.indexOf(a) - ACHS.indexOf(b)).map(a => {
+    const done = !!S.ach[a.id], hidden = a.secret && !done;
+    return '<div class="ach ' + (done ? 'done' : 'locked') + '"><div class="ic">' + (hidden ? '❓' : a.icon) + '</div><div><div class="nm">' + (hidden ? '???' : a.name) + '</div><div class="ds">' + (hidden ? 'Secret achievement' : a.desc) + '</div></div></div>';
+  }).join('');
 }
 
 // ====================== Audio ======================
@@ -202,6 +305,7 @@ function sfxClick(bg, sc, crit) {
   if (sc > 0.35) tone(110 - 40 * sc, 0.14, 'sine', 0.2 * sc, 40);
   if (crit) tone(1100, 0.12, 'square', 0.07, 1500);
 }
+function sfxAch() { [784, 988, 1175, 1568].forEach((f, i) => tone(f, 0.22, 'triangle', 0.13, f, i * 0.09)); }
 function sfxBuy() { tone(520, 0.08, 'square', 0.07, 780); }
 function sfxStage(scary) {
   if (scary) { tone(80, 1.0, 'sine', 0.5, 28); tone(300, 0.7, 'sawtooth', 0.1, 60); }
@@ -393,16 +497,20 @@ function pointerToLook(px, py) {
   fx.tgtX = dx / d * m; fx.tgtY = dy / d * m;
 }
 const CONFETTI = ['#ff5a5a', '#ffd93b', '#5ac8ff', '#7cff6b', '#ff7eb6', '#b88cff'];
+const clickTimes = [];
 function doClick(px, py) {
   let v = clickValue(); const crit = Math.random() < critChance(); if (crit) v *= 5;
   S.clicks += v; S.total += v;
+  S.manual++; if (crit) S.crits++;
+  const nowMs = performance.now(); clickTimes.push(nowMs); while (clickTimes.length && nowMs - clickTimes[0] > 1000) clickTimes.shift();
+  if (clickTimes.length >= 10) unlockAch('speed');
   fx.squish = 1;
   if (!S.calm && cur.sc > 0.5) fx.shake = Math.max(fx.shake, 0.4 + cur.sc * 0.6);
   fx.floats.push({ x: px, y: py - 10, vy: -60 - Math.random() * 30, life: 1, text: '+' + fmt(v), crit });
   const n = crit ? 14 : 5;
   for (let i = 0; i < n; i++) { const a = Math.random() * TAU, sp = 80 + Math.random() * 160; fx.parts.push({ x: px, y: py, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 40, life: 1, col: cur.sc > 0.5 ? '#220008' : (crit ? '#fff' : CONFETTI[(Math.random() * CONFETTI.length) | 0]) }); }
   audioInit(); sfxClick(cur.bg, cur.sc, crit);
-  checkStageUp();
+  checkStageUp(); checkAch();
 }
 function checkStageUp() {
   const si = stageInfo();
@@ -489,7 +597,7 @@ function frame(ts) {
 
   updateHud(si);
   updateAudio(sc, dt);
-  if (!frame.shopT || ts - frame.shopT > 200) { frame.shopT = ts; updateShop(); }
+  if (!frame.shopT || ts - frame.shopT > 200) { frame.shopT = ts; updateShop(); checkAch(); }
   if (!frame.saveT || ts - frame.saveT > 5000) { frame.saveT = ts; saveGame(); }
 }
 
@@ -541,24 +649,31 @@ function updateShop() {
 function buy(u) {
   const n = buyCount(u); if (n < 1) return;
   const cost = bulkCost(u, n); if (S.clicks < cost) return;
-  S.clicks -= cost; S.owned[u.id] = own(u.id) + n; audioInit(); sfxBuy(); updateShop(); saveGame();
+  S.clicks -= cost; S.owned[u.id] = own(u.id) + n; S.bought += n; audioInit(); sfxBuy(); updateShop(); checkAch(); saveGame();
 }
 document.querySelectorAll('#buyMode button').forEach(b => b.onclick = () => {
   buyMode = b.dataset.m; document.querySelectorAll('#buyMode button').forEach(x => x.classList.toggle('on', x === b)); updateShop();
 });
 function syncTools() { $('muteBtn').textContent = S.muted ? '🔇' : '🔊'; $('muteBtn').classList.toggle('off', S.muted); $('calmBtn').classList.toggle('off', !S.calm); }
 $('muteBtn').onclick = () => { S.muted = !S.muted; if (master) master.gain.value = S.muted ? 0 : 0.7; syncTools(); saveGame(); };
-$('calmBtn').onclick = () => { S.calm = !S.calm; toast(S.calm ? 'Calm mode ON: no flashing or shaking' : 'Calm mode OFF'); syncTools(); saveGame(); };
+$('calmBtn').onclick = () => { S.calm = !S.calm; if (S.calm) unlockAch('chill'); toast(S.calm ? 'Calm mode ON: no flashing or shaking' : 'Calm mode OFF'); syncTools(); saveGame(); };
 $('resetBtn').onclick = () => {
-  if (!confirm('Reset the whole game and start from zero?')) return;
+  if (!confirm('Reset the whole game and start from zero? (Your achievements are kept.)')) return;
   S.clicks = 0; S.total = 0; S.owned = {}; UPGRADES.forEach(u => { S.owned[u.id] = 0; }); lastStage = 0; saveGame(); updateShop(); toast('Game reset');
 };
+$('achBtn').onclick = () => { renderAch(); $('achPanel').classList.add('open'); };
+$('achClose').onclick = () => $('achPanel').classList.remove('open');
+window.addEventListener('keydown', e => { if (e.key === 'Escape') $('achPanel').classList.remove('open'); });
 $('startBtn').onclick = () => { S.started = true; $('intro').style.display = 'none'; audioInit(); if (ac && ac.state === 'suspended') ac.resume(); };
 
 // ====================== Boot ======================
 loadGame();
 const awaySec = Math.min(3600, Math.max(0, (Date.now() - (S.lastSeen || Date.now())) / 1000));
 if (perSecond() > 0 && awaySec > 30) { const gain = perSecond() * awaySec * 0.5; S.clicks += gain; S.total += gain; setTimeout(() => toast('Welcome back! +' + fmt(gain) + ' clicks while you were away'), 600); }
+// achievements that your saved progress already earned are given quietly, with one message
+achSilent = true; const before = achCount(); checkAch(); achSilent = false;
+if (achCount() > before) setTimeout(() => toast('🏆 ' + (achCount() - before) + ' achievements unlocked from your progress!'), 900);
+if (awaySec > 300 && perSecond() > 0) setTimeout(() => unlockAch('back'), 1800);
 lastStage = stageInfo().idx;
 cur = Object.assign({}, STAGES[lastStage].p);
 buildShop(); syncTools(); resize(); updateShop();
